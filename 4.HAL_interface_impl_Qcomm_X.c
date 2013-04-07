@@ -1,0 +1,1 @@
+/* * HAL的功能接口实现 * * HAL的主要功能就是要实现 hardware/libhardware/include/hardware/camera.h 里面定义的operation接口， * 这些接口在camera_hardware_t中有对应的"初步"实现，然后调用到 QCameraHardwareInterface 对象中的对应接口， * 本节就来介绍QCameraHardwareInterface对象中的实现。 * 从framework到现在，大致的调用流程如下： *		CameraService::Client => QualcommCamera2.cpp::camera_hardware_t => QCameraHWI.cpp::QCameraHardwareInterface */  

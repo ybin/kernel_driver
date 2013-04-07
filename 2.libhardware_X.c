@@ -214,6 +214,13 @@ typedef struct camera_device {
     camera_device_ops_t *ops;
     void *priv;
 } camera_device_t;
+/*
+ * 这里的方法非常类似于kernel的struct file接口，驱动程序只需完成对应的struct file_operations对象中
+ * 列举的各个operations即可。这里，各个硬件厂商只需提供camera_device_ops_t中列举的各个操作即可。
+ * 类似于struct file中的void *priv属性，struct camera_device中的void *priv属性如出一辙：
+ *		"方便驱动程序保存自己的状态数据"
+ * 理解这一点很重要！
+ */
 // 这里面的接口是不是很眼熟的呢?! 在framework的角度看底层，只能看到这些功能。
 typedef struct camera_device_ops {
     /** Set the ANativeWindow to which preview frames are sent */

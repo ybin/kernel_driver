@@ -1,0 +1,193 @@
+
+// following the calling order:
+// 6# is in the kernel space, and others
+// in the user space.
+
+0. Camera APP
+	packages/apps/Camera/
+1. Camera Java API
+	android.hardware.Camera
+2. libandroid_runtime.so
+	android_hardware_Camera.cpp
+3. libcamera_client.so
+	frameworks/av/camera/
+4. libcameraservice.so
+	frameworks/av/services/camera/
+5. HAL layer
+	hardware/qcom/camera
+6. kernel driver
+	kernel/dirvers/media/video/msm/
+7. vendor
+	vendor/qcom/proprietary/mm-camera/
+	
+从framework到HAL的流程(以takePicture()函数为例)：
+4-5.0 [@CameraService.cpp]
+// take a picture - image is returned in callback
+status_t CameraService::Client::takePicture(int msgType) {
+	// ......
+    return mHardware->takePicture();
+}
+
+4-5.1 [CameraService.cpp]
+CameraService::Client::Client(const sp<CameraService>& cameraService,
+        const sp<ICameraClient>& cameraClient,
+        const sp<CameraHardwareInterface>& hardware,
+        int cameraId, int cameraFacing, int clientPid) {
+	// ......
+    mCameraService = cameraService;
+    mCameraClient = cameraClient;
+	// mHardware comes here
+    mHardware = hardware;
+    mCameraId = cameraId;
+	// ......
+}
+
+4-5.2 [CameraService.cpp]
+sp<ICamera> CameraService::connect(
+        const sp<ICameraClient>& cameraClient, int cameraId) {
+	// ......
+    hardware = new CameraHardwareInterface(camera_device_name);
+    if (hardware->initialize(&mModule->common) != OK) {
+        hardware.clear();
+        return NULL;
+    }
+    client = new Client(this, cameraClient, hardware, cameraId, info.facing, callingPid);
+	// ......
+}
+
+4-5.3 [@CameraHardwareInterface.h::CameraHardwareInterface]
+status_t initialize(hw_module_t *module)
+{
+	ALOGI("Opening camera %s", mName.string());
+	// CameraHardwareInterface::mDevice(camera_device_t) comes here.
+	int rc = module->methods->open(module, mName.string(),
+								   (hw_device_t **)&mDevice);
+	if (rc != OK) {
+		ALOGE("Could not open camera %s: %d", mName.string(), rc);
+		return rc;
+	}
+	initHalPreviewWindow();
+	return rc;
+}
+
+4-5.4 [@CameraHardwareInterface.h::CameraHardwareInterface]
+status_t takePicture()
+{
+	ALOGV("%s(%s)", __FUNCTION__, mName.string());
+	if (mDevice->ops->take_picture)
+		return mDevice->ops->take_picture(mDevice);
+	return INVALID_OPERATION;
+}
+
+// 到此为止，也就是说：takePicture()函数最终调用到CameraHardwareInterface
+// 里的mDevice(camera_device_t 类型的对象)里的takePicture()函数，而
+// mDevice对象又是由mModule(hw_module_t类型的对象)创建出来的
+
+4-5.5 where comes "module" object? [@CameraService.cpp]
+void CameraService::onFirstRef()
+{
+    BnCameraService::onFirstRef();
+
+    if (hw_get_module(CAMERA_HARDWARE_MODULE_ID,
+                (const hw_module_t **)&mModule) < 0) {
+        ALOGE("Could not load camera HAL module");
+        mNumberOfCameras = 0;
+    }
+    else {
+        mNumberOfCameras = mModule->get_number_of_cameras();
+        if (mNumberOfCameras > MAX_CAMERAS) {
+            ALOGE("Number of cameras(%d) > MAX_CAMERAS(%d).",
+                    mNumberOfCameras, MAX_CAMERAS);
+            mNumberOfCameras = MAX_CAMERAS;
+        }
+        for (int i = 0; i < mNumberOfCameras; i++) {
+            setCameraFree(i);
+        }
+    }
+}
+
+4-5.6 [@hardware/libhardware/hardware.c]
+int hw_get_module(const char *id, const struct hw_module_t **module) {
+	return hw_get_module_by_class(id, null, module);
+}
+int hw_get_module_by_class(const char class_id, const char *inst, const struct hw_module_t **module) {
+	// ......
+	int status;
+	status = load(class_id, path, module);
+	// path 类似于/system/lib/hw/xxx.so
+}
+static int load(const char *id, const char *path, const struct hw_module_t **pHmi) {
+	void *handle;
+	struct hw_module_t *hmi;
+	handle = dlopen(path, RTLD_NOW);
+	const char *sym = HAL_MODULE_INFO_SYM_AS_STR;
+	// #define HAL_MODULE_INFO_SYM  HMI [@hardware/libhardware/include/hardware/hardware.h]
+	// #define HAL_MODULE_INFO_SYM_AS_STR "HMI" [@hardware/libhardware/include/hardware/hardware.h]
+	hmi = (struct hw_module_t *)slsym(handle, sym);
+	// ......
+	*pHmi = hmi;
+}
+// 由此获得hw_module_t类型的对象，保存到CameraHardwareInterface对象中就是mModule对象。
+// 功能性的函数接口，类似takePicture(), startPreview(), setParameters()，都有哪些呢，所有的这些都定义在
+// 		camera.h[@hardware/libhardware/include/hardware/]
+// 这个.h中定义的便是android标志的接口，各个厂商自己实现自己的方案。比如qualcomm的实现在：
+// 		QualcommCamera2.h[@hardware/qcom/camera/]
+// 接下来看看，mModule(hw_module_t)又是如何创建mDevice(camera_device_t)的，这部分具体实现都在各芯片厂商自己的
+// HAL实现中，以高通为例[@QualcommCamera2.cpp]：
+camera_module_t HAL_MODULE_INFO_SYM = {
+	common: camera_common,
+	get_number_of_cameras: get_number_of_cameras,
+	get_camera_info: get_camera_info,
+}
+// 其中：
+// #define HAL_MODULE_INFO_SYM  HMI [@hardware/libhardware/include/hardware/hardware.h]
+// 这恰好与hardware/libhardware/hardware.c::load()函数中的dlsym(handle, sym)统一起来。
+// 这里的common是一个hw_module_t结构体，camera_common的定义如下：
+static hw_module_t camera_common = {
+	tag:
+	version_major:
+	version_minor:
+	id:
+	name: "Qcamera",
+	author: "Qcom",
+	methods: &camera_module_methods,
+	dso: NULL,
+}
+static struct hw_module_methods_t camera_module_methods = {
+	open: camera_device_open
+};
+
+typedef struct {
+	camera_device hw_dev;
+	QCameraHardwareInterface *hardware;
+	int camera_released;
+	int cameraId;
+} camera_hardware_t;
+
+[@hardware/libhardware/include/hardware/camera.h]
+typedef struct camera_device {
+	hw_device_t common;
+	camera_device_ops_t *ops;
+	void *priv;
+} camera_device_t;
+
+// 函数中间有删减！
+extern "C" int camera_device_open(const struct hw_module_t *module,
+									const char *id, struct hw_device_t **hw_device) {
+	camera_device *device = NULL;
+	int cameraId = atoi(id);
+	camera_hardware_t *camHAL = (camera_hardware_t *)malloc(sizeof(camera_hardware_t));
+	memset(camHal, 0, sizeof(camera_hardware_t));
+	camHal->hardware = new QCameraHardwareInterface(cameraId, mode);
+	camHal->cameraId = cameraId;
+	device = &camHal->hw_dev;
+	device->common.close = close_camera_device;
+	device->ops = &camera_ops;
+	device->priv = (void *)camHal;
+	
+	// 将hw_device_t类型的对象返回了，mModule就是这样创建mDevice对象的。
+	*hardware = (hw_device_t *)&device->common;
+}
+
+// 接下来就是QCameraHardwareInterface[@hardware/qcom/camera/QCameraHWI.cpp]的事情了
+
