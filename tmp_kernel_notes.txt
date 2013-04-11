@@ -1,0 +1,23 @@
+﻿kernel notes:
+
+media controller:
+	snesor device:	ov9740
+	isp device:		VFE
+	IO device:		IPIF
+	extra device:	VPE, flash
+主要的两个文件，或者说 kernel 部分的入口在此：
+kernel/driver/meida/video/msm/msm.h
+kernel/driver/meida/video/msm/msm.c
+
+但是 msm.c 只是一个开始，它后面还有：
+	msm_camera.c
+	msm_io_XXX.c
+	msm_isp.c
+	msm_mctl.c
+	msm_vfe_XXX.c
+	msm_vpe.c
+	sensor/
+	actuator/
+	flash/
+msm.[ch] 只是一个"总括"而已，camera, io, isp, mctl, vfe, vpe 均为sub device.
+除此之外还有具体的驱动程序，如 ov9740.c 等。
